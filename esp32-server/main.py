@@ -68,17 +68,27 @@ def search():
 def play():
     song_name = request.args.get('search')
     if not song_name:
-        return "No song name", 400
+        return "No song name provided", 400
 
     opts = YDL_OPTS_BASE.copy()
     opts['default_search'] = 'ytsearch'
 
     with yt_dlp.YoutubeDL(opts) as ydl:
         try:
-            info = ydl.extract_info(f"ytsearch:{song_name}", download=False)['entries'][0]
-            return redirect(info['url'])
+            # 1. Extract the whole dictionary
+            info = ydl.extract_info(f"ytsearch:{song_name}", download=False)
+            
+            # 2. Check if 'entries' actually exists and has at least one item
+            if info and 'entries' in info and len(info['entries']) > 0:
+                # 3. Only then, try to grab the URL
+                video_url = info['entries'][0].get('url')
+                if video_url:
+                    return redirect(video_url)
+            
+            return "Bro, YouTube found nothing for that name!", 404
+            
         except Exception as e:
-            return f"Error: {str(e)}", 500
+            return f"Server Error: {str(e)}", 500
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
