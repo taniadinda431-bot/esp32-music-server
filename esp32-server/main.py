@@ -1,68 +1,91 @@
-from flask import Flask, request, redirect
+from flask import Flask, request, redirect, render_template_string
 import yt_dlp
 
 app = Flask(__name__)
 
-def get_yt_link(query):
-    # Try multiple "identities" to fool the bot detector
-    user_agents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
-        'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'
-    ]
-    
-    for ua in user_agents:
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'user_agent': ua,
-            'extract_flat': False, # Force it to get the actual URL
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            try:
-                # Force search specifically in YouTube Music
-                search_query = f"ytsearch:{query} lyrics"
-                info = ydl.extract_info(search_query, download=False)
-                
-                if info and 'entries' in info and len(info['entries']) > 0:
-                    entry = info['entries'][0]
-                    if entry and 'url' in entry:
-                        return entry['url']
-            except:
-                continue # Try the next User Agent if this one fails
-    return None
+# --- THE HTML PART (The UI you see on your phone/browser) ---
+HTML_PAGE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ESP32 Music Cloud</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { background: #121212; color: white; font-family: 'Segoe UI', sans-serif; text-align: center; padding: 20px; }
+        .container { max-width: 400px; margin: auto; background: #1e1e1e; padding: 20px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        h1 { color: #1DB954; font-size: 1.5em; }
+        input { padding: 12px; width: 80%; border-radius: 25px; border: none; margin-bottom: 10px; outline: none; }
+        button { padding: 10px 25px; background: #1DB954; color: white; border: none; border-radius: 25px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #1ed760; }
+        .footer { color: #666; font-size: 0.7em; margin-top: 20px; line-height: 1.5; }
+        .status-ready { color: #1DB954; font-size: 0.9em; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ESP32 Music Brain</h1>
+        <p class="status-ready">● Server is Live (Cookies Loaded)</p>
+        <form action="/play" method="get">
+            <input type="text" name="search" placeholder="Search song or artist..." required>
+            <br>
+            <button type="submit">Play Test</button>
+        </form>
+        <div class="footer">
+            <p>ESP32 Endpoint: <br> <code>/play?search=SONGNAME</code></p>
+            <p>Search Options: <br> <code>/search?q=SONGNAME</code></p>
+        </div>
+    </div>
+</body>
+</html>
+'''
+
+# --- THE LOGIC PART ---
+YDL_OPTS = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+    'no_warnings': True,
+    'nocheckcertificate': True,
+    'cookiefile': 'cookies.txt', 
+    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+}
 
 @app.route('/')
-def home():
-    return "Music Server Active"
-
-@app.route('/play')
-def play():
-    song = request.args.get('search')
-    if not song: return "Missing song name", 400
-    
-    link = get_yt_link(song)
-    if link:
-        return redirect(link)
-    else:
-        return "YouTube is blocking us. Try a different song name.", 403
+def index():
+    return render_template_string(HTML_PAGE)
 
 @app.route('/search')
 def search():
     query = request.args.get('q')
     if not query: return "Missing query", 400
     
-    # Simple search for titles
-    with yt_dlp.YoutubeDL({'quiet': True, 'default_search': 'ytsearch3'}) as ydl:
+    with yt_dlp.YoutubeDL({'quiet': True, 'default_search': 'ytsearch3', 'cookiefile': 'cookies.txt'}) as ydl:
         try:
             info = ydl.extract_info(f"ytsearch3:{query}", download=False)
-            titles = [e['title'][:30] for e in info['entries'] if e]
-            return "|".join(titles)
-        except:
-            return "Search failed"
+            if info and 'entries' in info:
+                # Filter out None and get titles
+                titles = [e['title'][:30] for e in info['entries'] if e]
+                return "|".join(titles)
+            return "No results"
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+@app.route('/play')
+def play():
+    song_name = request.args.get('search')
+    if not song_name: return "Missing song name", 400
+
+    with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
+        try:
+            info = ydl.extract_info(f"ytsearch:{song_name}", download=False)
+            if info and 'entries' in info and len(info['entries']) > 0:
+                first_result = info['entries'][0]
+                if first_result and 'url' in first_result:
+                    return redirect(first_result['url'])
+            
+            return "Could not find stream. Try a different name.", 404
+        except Exception as e:
+            return f"Server Error: {str(e)}", 500
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
